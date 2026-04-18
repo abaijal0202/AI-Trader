@@ -1,0 +1,2504 @@
+
+
+
+
+Technical Implementation Guide – Agentic AI Trading System (ICICI Breeze + Ollama + React Flow)
+
+
+Executive Overview and Implementation Assumptions
+
+
+Objective
+
+This guide describes the production implementation of a compliance-first, local-first, fail-closed agentic trading system for Indian retail markets using:
+
+
+ICICI Direct Breeze API for broker integration
+
+
+Ollama for local LLM inference
+
+
+FastAPI/Python for backend and orchestration
+
+
+PostgreSQL + TimescaleDB for transactional and time-series storage
+
+
+Redis for throttling, caching, pub/sub, and distributed coordination
+
+
+React + React Flow for operator UI and agent visualization
+
+
+Nginx for reverse proxy and TLS termination
+
+
+Docker / Kubernetes for deployment
+
+
+Prometheus / Grafana for monitoring
+
+
+HashiCorp Vault for secret management
+
+
+
+
+
+Architecture Principles
+
+
+
+
+
+Compliance-first
+
+
+
+
+Every execution path must enforce:
+
+
+Registered static IP egress
+
+
+Maximum 10 orders per second
+
+
+Single API key for unregistered algo routing
+
+
+Limit orders only in production policy
+
+
+Full auditability of prompts, signals, approvals, and executions
+
+
+
+
+
+Fail-closed
+
+
+
+
+When any of the following fails, the system must default to no-trade:
+
+
+Broker authentication
+
+
+Static IP validation
+
+
+Data staleness checks
+
+
+Risk gateway decision
+
+
+LLM schema validation
+
+
+Margin validation
+
+
+Market feed health
+
+
+
+
+
+Local-first
+
+
+
+
+Sensitive data must remain on controlled infrastructure:
+
+
+Ollama runs locally or on private network only
+
+
+No cloud LLM calls in production
+
+
+Secrets stored in Vault
+
+
+Internal service-to-service traffic restricted by network policy
+
+
+
+
+
+Core Guardrails
+
+Critical rule: LLM output must never directly trigger market execution.
+
+Every proposed action must pass deterministic validation, risk checks, compliance filters, and explicit execution policy enforcement.
+
+
+
+
+
+Key Assumptions
+
+Because Breeze API details can vary by broker release and documentation version, the team must validate the following before go-live:
+
+
+Exact request encoding semantics for GET-with-body behavior
+
+
+Current WebSocket auth payload format and endpoint URL
+
+
+Supported order types per segment
+
+
+Sandbox vs production parity
+
+
+Any newly introduced broker headers or checksum variations
+
+
+
+
+
+High-Level Deployment Topology
+
+
+[ React UI / React Flow ]
+
+|
+
+
+[ Nginx ]
+
+|
+
+
+80470060324
+
+
+
+
+
+
+
+|||
+
+
+[API][WS Hub][Auth]
+
+|||
+
+
+|Redis PubSub|
+
+|||
+
+
+|------[Risk Gateway]-|
+
+||
+
+
+|------[Execution Service]------[Breeze REST/WebSocket]
+
+||
+
+
+|------[Inference Gateway][Ollama]
+
+||
+
+
+|------[PostgreSQL + TimescaleDB]
+
+
+| [Prometheus/Grafana/Vault]
+
+
+69516087174
+
+
+
+
+
+
+ICICI Direct Breeze API Integration – Detailed Production Specs
+
+
+Integration Constraints
+
+From current Breeze documentation and BRD assumptions:
+
+
+100 API calls/minute
+
+
+5000 API calls/day
+
+
+10 OPS combined across place/modify/cancel/square-off
+
+
+Orders must originate from broker-registered static IP
+
+
+For unregistered algos, route via single API key
+
+
+Market orders are prohibited
+
+
+Margin and Option Plus flows should be blocked unless explicitly supported and approved
+
+
+Use SHA256(timestamp + JSONPostData + secret_key) checksum signing
+
+
+695160117453
+
+
+
+
+
+
+Authentication Flow
+
+
+Step-by-step
+
+
+Register app on Breeze portal
+
+
+Obtain AppKey
+
+
+Obtain secret_key
+
+
+Register redirect URL, typically https://127.0.0.1 for local auth handoff
+
+
+User login
+
+
+Open:
+
+
+https://api.icicidirect.com/apiuser/login?api_key=&lt;AppKey&gt;
+
+
+
+
+
+Capture API_Session
+
+
+
+
+
+After successful login, broker redirects with an API session token in the URL
+
+
+Call CustomerDetails
+
+
+Send API_Session as SessionToken and app key as AppKey
+
+
+Retrieve broker session_token
+
+
+Use broker session token for signed requests
+
+
+Every subsequent API request requires:
+
+
+X-Checksum
+
+
+X-Timestamp
+
+
+X-AppKey
+
+
+X-SessionToken
+
+
+
+
+
+Renew session
+
+
+On 401/403 or session expiry, force re-bootstrap using the login + customerdetails flow
+
+
+
+
+
+Authentication Sequence
+
+
+Operator/Admin -&gt; Breeze Login URL -&gt; ICICI Login ICICI Redirect -&gt; API_Session
+
+
+Backend -&gt; GET /customerdetails(SessionToken=API_Session, AppKey) Backend &lt;- session_token
+
+
+Backend -&gt; signed API requests using session_token
+
+
+69516099294
+
+
+
+
+
+
+Checksum Signing Example
+
+
+import hashlib import json
+
+
+from datetime import datetime, timezone
+
+
+
+
+
+def breeze_timestamp() -&gt; str:
+
+
+return datetime.now(timezone.utc).strftime(&quot;%Y-%m-%dT%H:%M:%S.000Z&quot;)
+
+
+
+
+
+
+
+def compact_json(payload: dict) -&gt; str:
+
+
+return json.dumps(payload, separators=(&quot;,&quot;, &quot;:&quot;), ensure_ascii=False)
+
+
+
+
+
+def generate_checksum(timestamp: str, json_post_data: str, secret_key: str) -&gt; str: raw = f&quot;{timestamp}{json_post_data}{secret_key}&quot;
+
+
+return hashlib.sha256(raw.encode(&quot;utf-8&quot;)).hexdigest()
+
+
+
+
+
+payload = {
+
+
+&quot;stock_code&quot;: &quot;ITC&quot;, &quot;exchange_code&quot;: &quot;NSE&quot;, &quot;product&quot;: &quot;cash&quot;,
+
+
+&quot;action&quot;: &quot;buy&quot;, &quot;order_type&quot;: &quot;limit&quot;, &quot;quantity&quot;: &quot;1&quot;,
+
+
+&quot;price&quot;: &quot;430.50&quot;
+
+}
+
+
+
+
+
+timestamp = breeze_timestamp() body = compact_json(payload)
+
+
+checksum = generate_checksum(timestamp, body, &quot;YOUR_SECRET_KEY&quot;)
+
+
+
+
+
+headers = {
+
+
+&quot;Content-Type&quot;: &quot;application/json&quot;, &quot;X-Checksum&quot;: f&quot;token {checksum}&quot;, &quot;X-Timestamp&quot;: timestamp,
+
+
+&quot;X-AppKey&quot;: &quot;YOUR_APP_KEY&quot;,
+
+
+&quot;X-SessionToken&quot;: &quot;BROKER_SESSION_TOKEN&quot;,
+
+}
+
+
+69516099694
+
+
+
+
+
+
+FastAPI-Oriented Breeze Client
+
+
+from   future  import annotations
+
+
+
+
+
+import asyncio import hashlib import json import random import time
+
+
+from dataclasses import dataclass
+
+
+from datetime import datetime, timezone from typing import Any, Callable, Optional
+
+
+
+
+
+import httpx
+
+
+from pydantic import BaseModel
+
+
+
+
+
+
+
+
+class BreezeAPIError(Exception):
+
+
+def   init  (self, status_code: int, message: str, payload: Any | None = None): super(). init (message)
+
+
+self.status_code = status_code self.payload = payload
+
+
+
+
+
+
+
+
+class BreezeAuthError(BreezeAPIError): pass
+
+
+
+
+
+
+
+
+class BreezeRateLimitError(BreezeAPIError): pass
+
+
+
+
+
+
+
+
+class BreezeTransientError(BreezeAPIError): pass
+
+
+
+
+
+
+
+
+class BreezeFatalError(BreezeAPIError): pass
+
+
+
+
+
+
+
+
+class BreezeResponse(BaseModel): Success: Any | None = None Status: int
+
+
+Error: Any | None = None
+
+
+
+
+
+
+
+
+@dataclass
+
+
+class BreezeConfig:
+
+
+base_url: str = &quot;https://api.icicidirect.com&quot;
+
+
+login_url: str = &quot;https://api.icicidirect.com/apiuser/login&quot; timeout_seconds: float = 5.0
+
+
+max_retries: int = 3 retry_base_ms: int = 100 calls_per_minute: int = 100 calls_per_day: int = 5000
+
+
+
+
+
+
+
+
+class BreezeClient: def  init (
+
+
+self, app_key: str,
+
+
+secret_key: str,
+
+
+api_session_provider: Callable[[], str],
+
+
+
+
+
+
+
+audit_hook: Optional[Callable[[dict], None]] = None,
+
+
+config: BreezeConfig | None = None,
+
+):
+
+
+self.app_key = app_key self.secret_key = secret_key
+
+
+self.api_session_provider = api_session_provider self.audit_hook = audit_hook or (lambda event: None) self.config = config or BreezeConfig() self._session_token: Optional[str] = None self._client = httpx.AsyncClient(
+
+
+timeout=self.config.timeout_seconds, base_url=self.config.base_url,
+
+)
+
+
+
+
+
+@staticmethod
+
+
+def _timestamp() -&gt; str:
+
+
+return datetime.now(timezone.utc).strftime(&quot;%Y-%m-%dT%H:%M:%S.000Z&quot;)
+
+
+
+
+
+@staticmethod
+
+
+def _compact_json(payload: dict[str, Any]) -&gt; str:
+
+
+return json.dumps(payload, separators=(&quot;,&quot;, &quot;:&quot;), ensure_ascii=False)
+
+
+
+
+
+def _checksum(self, timestamp: str, payload_str: str) -&gt; str: raw = f&quot;{timestamp}{payload_str}{self.secret_key}&quot;
+
+
+digest = hashlib.sha256(raw.encode(&quot;utf-8&quot;)).hexdigest() return f&quot;token {digest}&quot;
+
+
+
+
+
+async def bootstrap_session(self) -&gt; str: api_session = self.api_session_provider()
+
+
+payload = {&quot;SessionToken&quot;: api_session, &quot;AppKey&quot;: self.app_key}
+
+
+
+
+
+resp = await self._client.request( &quot;GET&quot;,
+
+
+&quot;/breezeapi/api/v1/customerdetails&quot;, headers={&quot;Content-Type&quot;: &quot;application/json&quot;}, content=self._compact_json(payload),
+
+)
+
+
+
+
+
+data = self._parse_response(resp)
+
+
+token = data[&quot;Success&quot;][&quot;session_token&quot;] self._session_token = token
+
+
+
+
+
+self.audit_hook({
+
+
+&quot;type&quot;: &quot;breeze.session_bootstrap&quot;, &quot;status&quot;: &quot;success&quot;,
+
+
+&quot;ts&quot;: self._timestamp(),
+
+})
+
+
+return token
+
+
+
+
+
+async def ensure_session(self) -&gt; str: if self._session_token:
+
+
+return self._session_token
+
+
+return await self.bootstrap_session()
+
+
+
+
+
+def _signed_headers(self, payload: dict[str, Any]) -&gt; dict[str, str]: if not self._session_token:
+
+
+raise BreezeAuthError(401, &quot;Session not initialized&quot;)
+
+
+
+
+
+payload_str = self._compact_json(payload) timestamp = self._timestamp()
+
+
+return {
+
+
+&quot;Content-Type&quot;: &quot;application/json&quot;,
+
+
+&quot;X-Checksum&quot;: self._checksum(timestamp, payload_str), &quot;X-Timestamp&quot;: timestamp,
+
+
+&quot;X-AppKey&quot;: self.app_key,
+
+
+&quot;X-SessionToken&quot;: self._session_token,
+
+}
+
+
+
+
+
+def _parse_response(self, resp: httpx.Response) -&gt; dict[str, Any]: try:
+
+
+data = resp.json() except Exception:
+
+
+raise BreezeFatalError(resp.status_code, &quot;Non-JSON response&quot;, resp.text)
+
+
+
+
+
+if resp.status_code in (401, 403):
+
+
+raise BreezeAuthError(resp.status_code, &quot;Unauthorized&quot;, data) if resp.status_code == 429:
+
+
+raise BreezeRateLimitError(resp.status_code, &quot;Rate limit exceeded&quot;, data) if resp.status_code in (408, 500, 502, 503, 504):
+
+
+raise BreezeTransientError(resp.status_code, &quot;Transient broker error&quot;, data) if resp.status_code &gt;= 400:
+
+
+raise BreezeFatalError(resp.status_code, &quot;Broker request failed&quot;, data) return data
+
+
+async def request( self,
+
+
+method: str, path: str,
+
+
+payload: dict[str, Any] | None = None,
+
+*,
+
+
+idempotent: bool = True, operation_name: str = &quot;unknown&quot;
+
+
+) -&gt; dict[str, Any]: payload = payload or {}
+
+
+
+
+
+
+
+await self.ensure_session()
+
+
+headers = self._signed_headers(payload) body = self._compact_json(payload)
+
+
+
+
+
+for attempt in range(self.config.max_retries + 1): try:
+
+
+start = time.perf_counter()
+
+
+resp = await self._client.request( method=method,
+
+
+url=path, headers=headers, content=body
+
+)
+
+
+data = self._parse_response(resp)
+
+
+
+
+
+self.audit_hook({
+
+
+&quot;type&quot;: &quot;breeze.request&quot;, &quot;operation&quot;: operation_name, &quot;method&quot;: method,
+
+
+&quot;path&quot;: path,
+
+
+&quot;payload_hash&quot;: hashlib.sha256(body.encode()).hexdigest(), &quot;status_code&quot;: resp.status_code,
+
+
+&quot;latency_ms&quot;: round((time.perf_counter() - start) * 1000, 2), &quot;ts&quot;: self._timestamp(),
+
+})
+
+
+return data
+
+
+
+
+
+except BreezeAuthError: self._session_token = None
+
+
+if attempt &lt; self.config.max_retries: await self.bootstrap_session()
+
+
+headers = self._signed_headers(payload) continue
+
+
+raise
+
+
+
+
+
+except BreezeTransientError as exc:
+
+
+if not idempotent or attempt &gt;= self.config.max_retries: raise exc
+
+
+delay = self._backoff(attempt) await asyncio.sleep(delay) continue
+
+
+
+
+
+except BreezeRateLimitError as exc:
+
+
+if attempt &gt;= self.config.max_retries: raise exc
+
+
+delay = self._backoff(attempt, aggressive=True) await asyncio.sleep(delay)
+
+
+continue
+
+
+
+
+
+@staticmethod
+
+
+def _backoff(attempt: int, aggressive: bool = False) -&gt; float: base = 0.1 if not aggressive else 0.5
+
+
+jitter = random.uniform(0, 0.15)
+
+
+return min(base * (2 ** attempt) + jitter, 3.0)
+
+
+
+
+
+async def get_funds(self) -&gt; dict[str, Any]:
+
+
+return await self.request(&quot;GET&quot;, &quot;/breezeapi/api/v1/funds&quot;, {}, operation_name=&quot;get_funds&quot;)
+
+
+
+
+
+async def get_historical(self, payload: dict[str, Any]) -&gt; dict[str, Any]:
+
+
+return await self.request(&quot;GET&quot;, &quot;/breezeapi/api/v1/historicalcharts&quot;, payload, operation_name=&quot;historical&quot;)
+
+
+
+
+
+async def place_order(self, payload: dict[str, Any]) -&gt; dict[str, Any]:
+
+
+return await self.request(&quot;POST&quot;, &quot;/breezeapi/api/v1/order&quot;, payload, idempotent=False, operation_name=&quot;place_order&quot;)
+
+
+
+
+
+async def modify_order(self, payload: dict[str, Any]) -&gt; dict[str, Any]:
+
+
+return await self.request(&quot;PUT&quot;, &quot;/breezeapi/api/v1/order&quot;, payload, idempotent=False, operation_name=&quot;modify_order&quot;)
+
+
+
+
+
+async def cancel_order(self, payload: dict[str, Any]) -&gt; dict[str, Any]:
+
+
+return await self.request(&quot;DELETE&quot;, &quot;/breezeapi/api/v1/order&quot;, payload, idempotent=False, operation_name=&quot;cancel_orde
+
+
+
+
+
+FastAPI Dependency Wrapper
+
+
+from fastapi import Depends, FastAPI app = FastAPI()
+
+
+def get_api_session() -&gt; str:
+
+
+# Replace with secure retrieval from operator session vault/DB after manual login return &quot;API_SESSION_FROM_LOGIN_REDIRECT&quot;
+
+
+
+
+
+def audit_hook(event: dict) -&gt; None:
+
+
+# Persist to audit log queue or DB writer print(event)
+
+
+
+
+
+def get_breeze_client() -&gt; BreezeClient: return BreezeClient(
+
+
+app_key=&quot;APP_KEY&quot;, secret_key=&quot;SECRET_KEY&quot;, api_session_provider=get_api_session, audit_hook=audit_hook
+
+)
+
+
+
+
+
+@app.get(&quot;/internal/funds&quot;)
+
+
+
+
+
+
+
+async def internal_funds(client: BreezeClient = Depends(get_breeze_client)):
+
+
+return await client.get_funds()
+
+
+69516099909
+
+
+
+
+
+
+Endpoint Catalog
+
+Note: The fields below are the system-used subset. Validate current broker docs before production rollout.
+
+
+
+
+
+Method
+
+
+Path
+
+
+Purpose
+
+
+Core Request Params
+
+
+Key Response Fields
+
+
+GET
+
+
+/apiuser/login?api_key=AppKey
+
+
+Interactive login bootstrap
+
+
+api_key
+
+
+Redirect with API_Session
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/customerdetails
+
+
+Exchange API session for broker session token
+
+
+
+
+
+
+
+
+SessionToken, AppKey
+
+
+session_token, idirect_userid, segments_allowed, exg_status
+
+
+
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/historicalcharts
+
+
+
+
+
+OHLCV historical bars
+
+
+interval, from_date, to_date, stock_code, exchange_code, product_type, optional derivatives fields
+
+
+
+
+
+datetime, open, high, low, close, volume, open_interest
+
+
+
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/quotes
+
+
+
+
+
+Current quote and market depth
+
+
+stock_code, exchange_code, optional product_type, expiry_date, right, strike_price
+
+
+
+
+
+ltp, ltt, best_bid_price, best_offer_price, open, high, low
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/funds
+
+
+
+
+
+Available capital and allocation
+
+
+
+
+
+none
+
+
+bank_account, unallocated_balance, allocated_equity, allocated_fno
+
+
+POST
+
+
+
+
+
+/breezeapi/api/v1/funds
+
+
+Allocate/deallocate funds
+
+
+transaction_type, amount, segment
+
+
+
+
+
+status
+
+
+POST
+
+
+
+
+
+/breezeapi/api/v1/margincalculator
+
+
+Pre-trade margin sufficiency
+
+
+exchange_code, list_of_positions
+
+
+margin_calculation or total margin fields
+
+
+
+
+
+
+
+
+POST
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/order
+
+
+
+
+
+
+
+
+Place order
+
+
+stock_code, exchange_code, product, action, order_type, quantity, price,
+
+
+derivatives fields if needed
+
+
+
+
+
+
+
+
+order_id, message
+
+
+
+
+
+PUT
+
+
+
+
+
+/breezeapi/api/v1/order
+
+
+
+
+
+Modify order
+
+
+order_id, exchange_code, quantity, price, relevant derivatives fields
+
+
+
+
+
+order_id, message
+
+
+DELETE
+
+
+/breezeapi/api/v1/order
+
+
+Cancel order
+
+
+order_id, exchange_code
+
+
+order_id, message
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/order
+
+
+
+
+
+Order book or order detail
+
+
+
+
+
+order_id or date/filter params
+
+
+order_id, status, pending_quantity, average_price, exchange_order_id
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/trades
+
+
+
+
+
+Trade book
+
+
+
+
+
+from_date, to_date, exchange_code
+
+
+trade_id, order_id, execution_price, executed_quantity, trade_date
+
+
+
+
+
+GET
+
+
+
+
+
+/breezeapi/api/v1/portfoliopositions
+
+
+
+
+
+Live positions
+
+
+
+
+
+usually none
+
+
+stock_code, quantity, average_price, ltp, pnl, segment
+
+
+
+
+
+GET
+
+
+
+
+
+/breezeapi/api/v1/dematholdings
+
+
+
+
+
+Demat holdings
+
+
+
+
+
+none
+
+
+stock_code, stock_ISIN, quantity, demat_avail_quantity
+
+
+
+
+
+GET
+
+
+
+
+
+/breezeapi/api/v1/portfolioholdings
+
+
+
+
+
+Portfolio holdings
+
+
+
+
+
+may be none or broker filters
+
+
+stock_code, quantity, average_price, current_value
+
+
+
+
+
+GET
+
+
+
+
+
+
+
+
+/breezeapi/api/v1/OptionChain
+
+
+
+
+
+Option chain discovery
+
+
+stock_code, exchange_code, expiry_date, product_type
+
+
+strike_price, right, ltp, best_bid_price, open_interest, chnge_oi
+
+
+
+
+
+JSON Request/Response Examples
+
+
+Customer Details
+
+
+Request
+
+{
+
+
+&quot;SessionToken&quot;: &quot;API_SESSION_FROM_REDIRECT&quot;, &quot;AppKey&quot;: &quot;YOUR_APP_KEY&quot;
+
+}
+
+
+Response
+
+
+
+
+
+
+{
+
+
+&quot;Success&quot;: {
+
+
+&quot;idirect_userid&quot;: &quot;379XTZ300&quot;, &quot;idirect_user_name&quot;: &quot;JOHN SMITH&quot;, &quot;session_token&quot;: &quot;QUgzNzkzMDA6NDUwNTM0MjI=&quot;, &quot;segments_allowed&quot;: {
+
+
+&quot;Trading&quot;: &quot;Y&quot;,
+
+
+&quot;Equity&quot;: &quot;Y&quot;,
+
+
+&quot;Derivatives&quot;: &quot;Y&quot;,
+
+
+&quot;Currency&quot;: &quot;Z&quot;
+
+},
+
+
+&quot;exg_status&quot;: { &quot;NSE&quot;: &quot;O&quot;,
+
+
+&quot;FNO&quot;: &quot;Y&quot;
+
+}
+
+},
+
+
+&quot;Status&quot;: 200, &quot;Error&quot;: null
+
+}
+
+
+Historical Charts
+
+
+Request
+
+{
+
+
+&quot;interval&quot;: &quot;1minute&quot;,
+
+
+&quot;from_date&quot;: &quot;2025-02-03T09:15:00.000Z&quot;, &quot;to_date&quot;: &quot;2025-02-03T09:30:00.000Z&quot;,
+
+
+&quot;stock_code&quot;: &quot;ITC&quot;, &quot;exchange_code&quot;: &quot;NSE&quot;, &quot;product_type&quot;: &quot;cash&quot;
+
+}
+
+
+Response
+
+{
+
+
+&quot;Success&quot;: [
+
+{
+
+
+&quot;datetime&quot;: &quot;2025-02-03 09:21:00&quot;,
+
+
+&quot;stock_code&quot;: &quot;ITC&quot;, &quot;exchange_code&quot;: &quot;NSE&quot;, &quot;open&quot;: &quot;430.10&quot;,
+
+
+&quot;high&quot;: &quot;430.45&quot;,
+
+
+&quot;low&quot;: &quot;429.95&quot;,
+
+
+&quot;close&quot;: &quot;430.30&quot;,
+
+
+&quot;volume&quot;: &quot;1951&quot;, &quot;open_interest&quot;: null, &quot;count&quot;: 7
+
+}
+
+],
+
+
+&quot;Status&quot;: 200, &quot;Error&quot;: null
+
+}
+
+
+Funds
+
+
+Request
+
+{}
+
+
+
+
+
+Response
+
+{
+
+
+&quot;Success&quot;: {
+
+
+&quot;bank_account&quot;: &quot;XXXXXX9012&quot;, &quot;total_bank_balance&quot;: 8000000.0,
+
+
+&quot;allocated_equity&quot;: 2000000.0,
+
+
+&quot;allocated_fno&quot;: 2000000.0,
+
+
+&quot;block_by_trade_balance&quot;: 155000.0,
+
+
+&quot;unallocated_balance&quot;: &quot;875000.00&quot;
+
+},
+
+
+&quot;Status&quot;: 200, &quot;Error&quot;: null
+
+}
+
+
+Margin Calculator
+
+
+Request
+
+{
+
+
+&quot;exchange_code&quot;: &quot;NFO&quot;, &quot;list_of_positions&quot;: [
+
+{
+
+
+&quot;strike_price&quot;: &quot;0&quot;,
+
+
+&quot;quantity&quot;: &quot;15&quot;,
+
+
+&quot;right&quot;: &quot;others&quot;, &quot;product&quot;: &quot;futures&quot;, &quot;action&quot;: &quot;buy&quot;,
+
+
+&quot;price&quot;: &quot;46230.85&quot;,
+
+
+&quot;expiry_date&quot;: &quot;27-Feb-2025&quot;, &quot;stock_code&quot;: &quot;CNXBAN&quot;, &quot;cover_order_flow&quot;: &quot;N&quot;,
+
+
+
+
+
+
+
+&quot;fresh_order_type&quot;: &quot;N&quot;,
+
+
+&quot;cover_limit_rate&quot;: &quot;0&quot;,
+
+
+&quot;cover_sltp_price&quot;: &quot;0&quot;,
+
+
+&quot;fresh_limit_rate&quot;: &quot;0&quot;,
+
+
+&quot;open_quantity&quot;: &quot;0&quot;
+
+}
+
+]
+
+}
+
+
+Response
+
+{
+
+
+&quot;Success&quot;: { &quot;margin_calculation&quot;: [
+
+{
+
+
+&quot;stock_code&quot;: &quot;CNXBAN&quot;, &quot;product&quot;: &quot;Futures&quot;, &quot;action&quot;: &quot;Buy&quot;,
+
+
+&quot;quantity&quot;: &quot;15&quot;,
+
+
+&quot;price&quot;: &quot;46230.85&quot;
+
+}
+
+],
+
+
+&quot;total_margin&quot;: &quot;185000.00&quot;
+
+},
+
+
+&quot;Status&quot;: 200, &quot;Error&quot;: null
+
+}
+
+
+Order Placement
+
+
+Request
+
+{
+
+
+&quot;stock_code&quot;: &quot;ITC&quot;, &quot;exchange_code&quot;: &quot;NSE&quot;, &quot;product&quot;: &quot;cash&quot;,
+
+
+&quot;action&quot;: &quot;buy&quot;, &quot;order_type&quot;: &quot;limit&quot;, &quot;quantity&quot;: &quot;1&quot;,
+
+
+&quot;price&quot;: &quot;430.50&quot;,
+
+
+&quot;validity&quot;: &quot;day&quot;, &quot;user_remark&quot;: &quot;STRAT01&quot;
+
+}
+
+
+Response
+
+{
+
+
+&quot;Success&quot;: {
+
+
+&quot;order_id&quot;: &quot;202502030001234&quot;,
+
+
+&quot;message&quot;: &quot;Order placed successfully&quot;, &quot;user_remark&quot;: &quot;STRAT01&quot;
+
+},
+
+
+&quot;Status&quot;: 200, &quot;Error&quot;: null
+
+}
+
+
+Order Status
+
+
+Request
+
+{
+
+
+&quot;order_id&quot;: &quot;202502030001234&quot;,
+
+
+&quot;exchange_code&quot;: &quot;NSE&quot;
+
+}
+
+
+Response
+
+{
+
+
+&quot;Success&quot;: [
+
+{
+
+
+&quot;order_id&quot;: &quot;202502030001234&quot;,
+
+
+&quot;status&quot;: &quot;Executed&quot;, &quot;stock_code&quot;: &quot;ITC&quot;,
+
+
+&quot;action&quot;: &quot;Buy&quot;,
+
+
+&quot;quantity&quot;: &quot;1&quot;,
+
+
+&quot;pending_quantity&quot;: &quot;0&quot;,
+
+
+&quot;average_price&quot;: &quot;430.45&quot;,
+
+
+&quot;order_datetime&quot;: &quot;2025-02-03 09:23:05&quot;,
+
+
+&quot;exchange_order_id&quot;: &quot;1300000123456&quot;
+
+}
+
+],
+
+
+&quot;Status&quot;: 200, &quot;Error&quot;: null
+
+}
+
+
+69516099933
+
+
+
+Error Handling and Retry Strategy
+
+
+
+
+
+Condition
+
+
+Broker Status
+
+
+Retry?
+
+
+Idempotent?
+
+
+Strategy
+
+
+Invalid checksum
+
+
+400/401
+
+
+No
+
+
+N/A
+
+
+Alert + halt API usage until fixed
+
+
+Session expired
+
+
+401/403
+
+
+Yes
+
+
+Yes
+
+
+Re-bootstrap session once, then retry
+
+
+
+
+
+
+
+ConditionBroker Status Retry?Idempotent?Strategy
+
+
+Static IP mismatch
+
+
+403
+
+
+No
+
+
+N/A
+
+
+Kill switch + operator incident
+
+
+Rate limit hit
+
+
+429 or broker error
+
+
+payload
+
+
+Yes
+
+
+Yes
+
+
+Exponential backoff + jitter
+
+
+Timeout
+
+
+408
+
+
+Yes
+
+
+GET yes / POST no by default
+
+
+Retry only for idempotent calls
+
+
+5xx broker errors
+
+
+500/502/503/504
+
+
+Yes
+
+
+GET yes / POST no by default
+
+
+3 retries max
+
+
+Validation error
+
+
+400
+
+
+No
+
+
+N/A
+
+
+Fix request builder or reject signal
+
+
+Duplicate order risk
+
+
+ambiguous
+
+
+No
+
+
+POST/PUT/DELETE non-
+
+
+idempotent
+
+
+Query order book before any manual re-submit
+
+
+
+
+
+Exponential Backoff with Jitter
+
+
+import random
+
+
+
+
+
+def backoff_seconds(attempt: int, base: float = 0.25, cap: float = 3.0) -&gt; float: return min(base * (2 ** attempt) + random.uniform(0, 0.15), cap)
+
+
+
+
+
+Idempotency Guidance
+
+
+
+
+
+Safe to retry:
+
+
+
+
+
+GET /historicalcharts
+
+
+GET /quotes
+
+
+GET /funds
+
+
+GET /order
+
+
+GET /trades
+
+
+
+
+
+Unsafe to blindly retry:
+
+
+
+
+
+POST /order
+
+
+PUT /order
+
+
+DELETE /order
+
+
+
+
+For unsafe operations:
+
+
+Log the ambiguous response
+
+
+Query order book using order filters
+
+
+Reconcile state before re-sending
+
+
+695160117488
+
+
+
+
+
+
+WebSocket Connection Management
+
+Breeze WebSocket details may vary by documentation version. Validate live endpoint, auth payload, and subscription format before production.
+
+
+
+
+
+Production Pattern
+
+Use a dedicated Market Data Gateway service:
+
+
+Maintains single upstream broker WebSocket sessions
+
+
+Tracks subscriptions by instrument
+
+
+Detects stale streams
+
+
+Re-broadcasts normalized events to internal consumers and UI
+
+
+
+
+
+Components
+
+
+
+
+
+Upstream WS Client: broker connection
+
+
+Subscription Registry: Redis set/hash of subscribed instruments
+
+
+Feed Normalizer: maps raw ticks/order updates to internal schema
+
+
+Stale Feed Monitor: detects no-tick gaps
+
+
+Internal WS Hub: pushes events to React UI and backend services
+
+
+
+
+
+Reconnect Loop Pseudocode
+
+
+async def run_broker_ws(): while True:
+
+
+try:
+
+
+conn = await connect_broker_ws() await authenticate(conn)
+
+
+await restore_subscriptions(conn)
+
+
+
+
+
+while True:
+
+
+msg = await recv_with_timeout(conn, timeout=5) if msg is None:
+
+
+await send_heartbeat(conn) continue
+
+
+
+
+
+normalized = normalize_broker_message(msg) publish_internal_event(normalized) update_last_seen(normalized[&quot;instrument_key&quot;])
+
+
+
+
+
+except Exception as exc: log_error(&quot;broker_ws_disconnect&quot;, error=str(exc))
+
+
+
+
+
+
+
+mark_feed_degraded()
+
+
+await asyncio.sleep(reconnect_delay())
+
+
+
+
+
+Heartbeat and Stale Feed Detection
+
+
+STALE_SECONDS = 3
+
+
+
+
+
+def detect_stale_feeds(last_seen_map: dict[str, float]) -&gt; list[str]: now = time.time()
+
+
+stale = []
+
+
+for instrument_key, ts in last_seen_map.items(): if now - ts &gt; STALE_SECONDS:
+
+
+stale.append(instrument_key) return stale
+
+
+
+
+
+Internal Re-Broadcast Event Schema
+
+
+
+
+{
+
+
+&quot;event_type&quot;: &quot;market.tick&quot;, &quot;ts&quot;: &quot;2025-02-03T09:21:01.123Z&quot;,
+
+
+&quot;instrument_key&quot;: &quot;NSE:ITC:CASH&quot;, &quot;payload&quot;: {
+
+
+&quot;ltp&quot;: 430.3,
+
+
+&quot;bid&quot;: 430.25,
+
+
+&quot;ask&quot;: 430.35,
+
+
+&quot;volume&quot;: 1951
+
+},
+
+
+&quot;source&quot;: &quot;breeze_ws&quot;, &quot;sequence&quot;: 102034
+
+}
+
+
+Order Update Event Schema
+
+
+
+
+{
+
+
+&quot;event_type&quot;: &quot;order.update&quot;, &quot;ts&quot;: &quot;2025-02-03T09:23:05.021Z&quot;, &quot;order_id&quot;: &quot;202502030001234&quot;,
+
+
+&quot;status&quot;: &quot;Executed&quot;, &quot;payload&quot;: {
+
+
+&quot;exchange_order_id&quot;: &quot;1300000123456&quot;,
+
+
+&quot;filled_qty&quot;: 1,
+
+
+&quot;avg_price&quot;: 430.45
+
+}
+
+}
+
+
+695160100093
+
+
+
+Ollama Integration – Production Implementation
+
+
+Model Selection Matrix
+
+
+
+
+
+Model
+
+
+Use Case
+
+
+Approx RAM
+
+
+Latency Tradeoff
+
+
+Recommendation
+
+
+
+
+
+llama3.1:8b-instruct-q4_K_M
+
+
+richer reasoning, trade explanation, anomaly review
+
+
+6–8 GB
+
+
+slower, better depth
+
+
+Use for low-frequency reasoning
+
+
+phi4:mini or quantized equivalent
+
+
+fast structured classification, signal summaries
+
+
+3–5 GB
+
+
+fast, balanced quality
+
+
+Default production model
+
+
+qwen2.5:3b-instruct-q4 or similar small fallback
+
+
+fallback classification
+
+
+2–4 GB
+
+
+fastest, lower depth
+
+
+Timeout fallback
+
+Final model tags depend on supported Ollama library availability in your environment.
+
+
+695160117187
+
+
+
+
+
+
+Production Architecture Pattern
+
+
+[Agents] -&gt; [Inference Gateway API] -&gt; [Ollama localhost/private IP]
+
+|
+
+
+schema validation
+
+|
+
+
+fallback rules engine
+
+|
+
+
+audit logging
+
+
+
+
+
+Why use a gateway
+
+Do not let all agents call Ollama directly. The gateway enforces:
+
+
+model pinning
+
+
+timeout controls
+
+
+prompt templates
+
+
+JSON schema validation
+
+
+prompt hash logging
+
+
+fallback behavior
+
+
+latency budgeting
+
+
+695160117149
+
+
+
+
+
+
+
+
+Pydantic Output Schema
+
+
+from typing import Literal
+
+
+from pydantic import BaseModel, Field, conlist, confloat
+
+
+
+
+
+class RiskFlag(BaseModel): code: str
+
+
+severity: Literal[&quot;low&quot;, &quot;medium&quot;, &quot;high&quot;, &quot;critical&quot;] message: str
+
+
+
+
+
+class TradeDecisionOutput(BaseModel):
+
+
+action: Literal[&quot;BUY&quot;, &quot;SELL&quot;, &quot;HOLD&quot;, &quot;REJECT&quot;]
+
+
+confidence: confloat(ge=0.0, le=1.0)
+
+
+reasons: conlist(str, min_length=1, max_length=8) risk_flags: list[RiskFlag] = Field(default_factory=list) human_summary: str = Field(min_length=10, max_length=500) feature_snapshot_hash: str
+
+
+69516086222
+
+
+
+
+
+
+Inference Wrapper
+
+
+from   future  import annotations
+
+
+
+
+
+import asyncio import hashlib import json
+
+
+from typing import Any
+
+
+
+
+
+import httpx
+
+
+from pydantic import ValidationError
+
+
+
+
+
+OLLAMA_URL = &quot;http://ollama:11434/api/generate&quot;
+
+
+
+
+
+class LLMValidationError(Exception): pass
+
+
+
+
+
+class InferenceGateway:
+
+
+def   init  (self, model_primary: str, model_fallback: str, timeout_s: float = 0.45): self.model_primary = model_primary
+
+
+self.model_fallback = model_fallback self.timeout_s = timeout_s
+
+
+self.client = httpx.AsyncClient(timeout=timeout_s)
+
+
+
+
+
+async def infer_trade_decision(self, prompt: str) -&gt; TradeDecisionOutput: for model in (self.model_primary, self.model_fallback):
+
+
+try:
+
+
+raw = await self._generate(model, prompt) return self._parse(raw)
+
+
+except (asyncio.TimeoutError, httpx.TimeoutException, LLMValidationError, ValidationError): continue
+
+
+
+
+
+return TradeDecisionOutput( action=&quot;REJECT&quot;, confidence=0.0,
+
+
+reasons=[&quot;LLM_UNAVAILABLE&quot;, &quot;FALLBACK_RULE_TRIGGERED&quot;],
+
+
+risk_flags=[{&quot;code&quot;: &quot;LLM_FAIL&quot;, &quot;severity&quot;: &quot;high&quot;, &quot;message&quot;: &quot;Model unavailable or invalid&quot;}], human_summary=&quot;LLM output unavailable. Strategy fell back to deterministic rejection.&quot;, feature_snapshot_hash=self._hash(prompt),
+
+)
+
+
+
+
+
+async def _generate(self, model: str, prompt: str) -&gt; str: payload = {
+
+
+&quot;model
+

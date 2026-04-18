@@ -1,0 +1,1676 @@
+
+
+
+7619995695949
+
+
+DISCLAIMER: This Business Requirements Document (BRD) does not constitute legal or regulatory advice. All compliance parameters, including SEBI algorithmic trading rules and broker-specific (ICICI Direct) API constraints, must be independently verified and signed off by the organization&apos;s legal and compliance teams prior to live deployment.
+
+
+DISCLAIMER: This Business Requirements Document (BRD) does not constitute legal or regulatory advice. All compliance parameters, including SEBI algorithmic trading rules and broker-specific (ICICI Direct) API constraints, must be independently verified and signed off by the organization&apos;s legal and compliance teams prior to live deployment.
+
+
+
+
+
+Business Requirements Document (BRD)
+
+
+7715241585773
+
+
+
+
+
+Table of Contents
+
+
+Executive Summary
+
+
+Business Context and Objectives
+
+
+Regulatory Compliance Requirements
+
+
+System Architecture
+
+
+Functional Requirements
+
+
+Non-Functional Requirements
+
+
+Data Requirements
+
+
+Trading Strategies
+
+
+Risk Management Framework
+
+
+Integration Requirements
+
+
+Security Requirements
+
+
+Implementation Roadmap
+
+
+Assumptions, Constraints, and Open Items
+
+
+
+
+
+
+Table of Contents
+
+
+Executive Summary
+
+
+Business Context and Objectives
+
+
+Regulatory Compliance Requirements
+
+
+System Architecture
+
+
+Functional Requirements
+
+
+Non-Functional Requirements
+
+
+Data Requirements
+
+
+Trading Strategies
+
+
+Risk Management Framework
+
+
+Integration Requirements
+
+
+Security Requirements
+
+
+Implementation Roadmap
+
+
+Assumptions, Constraints, and Open ItemsAgentic AI Trading System
+
+761999282965
+
+
+
+Version 1.0 | Audience: Product, Engineering, Quant, Compliance, Security
+
+
+
+
+
+
+
+
+Success Metrics and Acceptance Criteria
+
+Appendix: Core API Endpoints and Glossary
+
+
+Success Metrics and Acceptance Criteria
+
+Appendix: Core API Endpoints and Glossary
+
+
+
+
+Executive Summary
+
+761999127303
+
+
+
+This Business Requirements Document (BRD) defines the scope, architecture, and constraints for developing a sophisticated, compliance-first Agentic AI Trading System designed for the Indian retail trading market. The system leverages a multi-agent architecture powered by Ollama&apos;s local Large Language Models (LLMs) to ensure low latency and data privacy. It strictly integrates with the ICICI Direct Breeze API, adhering to SEBI&apos;s algorithmic trading rules slated for 2025-2026, specifically regarding API execution limits, static IPs, and algorithmic identifiers.
+
+
+
+
+
+
+
+
+Business Context and Objectives
+
+761999117514
+
+
+
+The objective is to democratize institutional-grade trading intelligence for retail quantitative traders while maintaining rigorous adherence to emerging Indian regulatory frameworks. The system aims to automate technical analysis, signal generation, news sentiment processing, and order execution without sacrificing pre-trade risk controls.
+
+
+
+
+
+Objective ID
+
+
+Business Objective
+
+
+Key Performance Indicators (KPIs)
+
+
+OBJ-01
+
+
+Automate Trading Lifecycle
+
+
+Reduce manual intervention time by 95%; execute approved signals within 500ms.
+
+
+OBJ-02
+
+
+Ensure Regulatory Compliance
+
+
+0 compliance breaches; maintain maximum 10 orders/sec threshold.
+
+
+OBJ-03
+
+
+Data Privacy &amp; Security
+
+
+100% of LLM processing done locally via Ollama; no PII or financial data sent to cloud LLMs.
+
+
+
+
+
+Regulatory Compliance Requirements
+
+761999117524
+
+
+
+The solution shall be designed as a compliance-first retail/API trading platform for the Indian market. For the initial rollout, the system should assume operation within the prevailing SEBI/NSE/broker retail algo framework for 2025-2026 and enforce broker-implemented controls documented by ICICI Direct Breeze. Final production rules, exemptions, and operational processes must be revalidated with the latest SEBI, exchange, and broker circulars before go-live.
+
+
+
+
+
+
+
+Req ID
+
+
+Compliance Requirement
+
+
+System Response
+
+
+CR-01
+
+
+Maximum 10 orders per second including order placement, modification, cancellation, and square-off requests.
+
+
+Implement central throttling, per-second counters, queueing, and automatic order rejection when thresholds are exceeded.
+
+
+CR-02
+
+
+Orders must originate only from the broker-registered static IP address.
+
+
+Deploy from a fixed egress IP, continuously monitor source IP, and block execution when IP validation fails.
+
+
+CR-03
+
+
+Static IP updates are operationally limited by the broker to once per week.
+
+
+Use infrastructure change control, dual-environment planning, and pre-approved failover procedures.
+
+
+CR-04
+
+
+For unregistered algos, order routing is restricted to a single API key.
+
+
+Maintain one production execution credential set and prohibit multi-key load distribution.
+
+
+CR-05
+
+
+Market orders are not permitted via Breeze API.
+
+
+Execution agent shall construct limit orders only and reject any non-limit payload at validation time.
+
+
+CR-06
+
+
+Margin and Option Plus order placement/modification/cancellation are prohibited via Breeze API.
+
+
+Restrict supported product/order combinations in strategy configuration and execution rules.
+
+
+CR-07
+
+
+Strategy/Algo-ID readiness for registered algo scenarios.
+
+
+System shall maintain configurable strategy metadata, versioning, approval status, and Algo-ID tagging fields wherever broker/exchange registration becomes mandatory.
+
+
+CR-08
+
+
+Evidence and supervision expectations.
+
+
+Persist decision logs, prompts, risk approvals, user overrides, and execution events in tamper-evident storage.
+
+
+
+
+
+BR-01: The business shall obtain compliance sign-off for live deployment, including static IP registration, API credential issuance, and strategy approval workflow.
+
+
+BR-02: The platform shall support a paper-trading mode and controlled live pilot before any production-scale automation.
+
+
+BR-03: The platform shall support trade-window controls, user disclaimers, suitability checks, and manual kill-switch governance.
+
+
+
+
+
+
+
+
+System Architecture
+
+761999117780
+
+
+
+The target architecture is a modular, multi-agent system coordinated by an orchestration layer and backed by deterministic execution controls. Language-model reasoning is hosted locally through Ollama to reduce sensitive data exposure, improve latency, and preserve operability during internet instability. No LLM output may directly place trades; all trade actions must pass through typed tool/function calls, schema validation, rule validation, and risk approval gates.
+
+
+
+
+
+
+
+
+Architecture Principles
+
+
+
+
+
+
+
+Local-first intelligence: Run LLM inference on Ollama within the controlled network boundary.
+
+
+Deterministic execution: Convert agent outputs to structured JSON commands only after schema validation.
+
+
+Separation of duties: Keep signal generation, risk approval, and execution as separate runtime responsibilities.
+
+
+Compliance by design: Embed OPS throttling, limit-order enforcement, audit logging, and policy checks centrally.
+
+
+Fail-safe behavior: On data gaps, authentication failures, or abnormal volatility, default to no-trade mode.
+
+
+
+
+
+
+
+
+Multi-Agent Topography
+
+
+
+
+Agent
+
+
+Primary Responsibilities
+
+
+Key Inputs
+
+
+Key Outputs
+
+
+Orchestrator Agent
+
+
+Workflow coordination, scheduling, state handoff, retry policy, and incident routing.
+
+
+Market state, strategy config, agent health
+
+
+Task assignments, workflow state transitions
+
+
+Market Data Fetcher Agent
+
+
+Historical and live data retrieval from Breeze; token mapping refresh; data normalization.
+
+
+Breeze historical charts, quotes, security master, websocket feeds
+
+
+Normalized OHLCV streams and instrument metadata
+
+
+News Sentiment Agent
+
+
+Collects and summarizes recent news, computes symbol-level sentiment and event flags.
+
+
+News feeds, watchlists, issuer/index mapping
+
+
+Sentiment score, confidence score, event labels
+
+
+Signal Selection Agent
+
+
+Computes RSI, MACD, Bollinger Bands, moving averages, pairs spread metrics, and signal ranking.
+
+
+Features, sentiment, strategy templates, market microstructure filters
+
+
+Candidate trades with reason codes and confidence
+
+
+Risk Management Agent
+
+
+Margin sufficiency, exposure caps, per-trade risk, daily loss checks, slippage and liquidity checks.
+
+
+Candidate trades, positions, funds, margin output, policy rules
+
+
+Approve / reject / resize decision with rationale
+
+
+Execution Agent
+
+
+Breeze authentication, request signing, order placement, modify/cancel, and order state reconciliation.
+
+
+Approved orders, credentials, market quotes, throttle state
+
+
+Order acknowledgements, execution events, exception events
+
+
+Portfolio Monitoring Agent
+
+
+P&amp;L, MTM, positions, realized/unrealized returns, and alerting.
+
+
+Orders, trades, positions, funds
+
+
+Portfolio snapshots, alerts, kill-switch triggers
+
+
+Compliance / Audit Agent
+
+
+Audit trail generation, Algo-ID readiness, evidence retention, and supervision dashboards.
+
+
+All prompts, decisions, configs, execution events
+
+
+Audit reports, exception logs, review packs
+
+
+
+
+
+
+
+Ollama Local LLM Integration
+
+
+Ollama shall be deployed locally and accessed over controlled internal endpoints (for example,
+
+
+76199946005
+
+http://localhost:11434
+
+
+http://localhost:11434). It will be used for bounded reasoning tasks such as summarizing news, classifying sentiment, extracting event risk, and generating structured signal commentary. Function calling shall be implemented through an application wrapper that constrains the model to a fixed tool catalog and
+
+
+JSON schema. The system shall reject malformed model responses and fall back to deterministic, non-LLM
+
+
+execution rules when needed.
+
+
+
+
+
+
+
+
+Architecture Flow
+
+
+
+761999-154401
+[Breeze Historical / Live Data] --&gt; [Market Data Fetcher]+
+
+|
+
+[External News Feeds] ---------&gt; [News Sentiment Agent] ------
+
++--&gt; [Signal Selection Agent]
+
+
+
+
+| v
+
+[Orchestrator Agent]
+
+
+
+
+| v
+
+[Risk Management Agent]
+
+
+
+
+|
+
+
+
+
+Approved? ----+Rejected
+
+
+
+
+| v
+
+[Execution Agent]
+
+
+
+
+|
+
++
+
+++
+
+|
+
+|
+
+v
+
+v
+
+[Portfolio Monitoring Agent]
+
+[Compliance / Audit Agent]
+
+
+
+
+| v
+
+[Alerts, Logs, Reports, Replay Data]
+
+
+
+
+
+
+Functional Requirements
+
+761999127276
+
+
+
+
+
+Req ID
+
+
+Requirement
+
+
+Implementation Expectation
+
+
+Priority
+
+
+FR-01
+
+
+User configuration and policy management
+
+
+Provide admin/user configuration for watchlists, strategies, risk limits, trading windows, lot sizing, approved instruments, and paper/live mode.
+
+
+High
+
+
+FR-02
+
+
+Breeze authentication and session handling
+
+
+Support app registration, redirect URL, login using
+
+
+11906234371
+https://api.icicidirect.com/apiuser/login? api_key=AppKey
+
+
+, API session exchange, session token retrieval, checksum signing, and session renewal.
+
+
+High
+
+
+FR-03
+
+
+Market data ingestion
+
+
+Fetch OHLCV, quotes, option/futures metadata, historical charts, and security master mappings; normalize timestamps, symbols, and exchange/product identifiers.
+
+
+High
+
+
+FR-04
+
+
+News ingestion and sentiment analysis
+
+
+Collect one-week rolling news context for each tracked instrument/index and score sentiment, confidence, topic, and event intensity using local Ollama models.
+
+
+High
+
+
+FR-05
+
+
+Feature engineering
+
+
+Compute RSI, MACD, Bollinger Bands, moving averages, spread/Z-score features for pairs, realized volatility, and liquidity filters.
+
+
+High
+
+
+FR-06
+
+
+Signal generation and ranking
+
+
+Rank candidate trades using strategy rules, technical indicators, sentiment overlays, and configurable thresholds; emit reason codes and confidence scores.
+
+
+High
+
+
+FR-07
+
+
+Pre-trade risk and compliance validation
+
+
+Check margin sufficiency, position limits, product eligibility, static-IP status, OPS threshold, lot-size rules, and trading windows before approval.
+
+
+High
+
+
+FR-08
+
+
+Margin validation
+
+
+Use the Breeze margin calculator and funds endpoints to verify capital sufficiency before creating any live order request.
+
+
+High
+
+
+FR-09
+
+
+Order creation
+
+
+Create limit orders only; reject market, Margin, and Option Plus order attempts; include strategy ID, correlation ID, and audit metadata in internal records.
+
+
+High
+
+
+FR-10
+
+
+Order lifecycle management
+
+
+Support placement, modify, cancel, order-book monitoring, partial fill tracking, rejection handling, retries, and square-off workflows subject to policy.
+
+
+High
+
+
+FR-11
+
+
+Portfolio and P&amp;L monitoring
+
+
+Track positions, realized/unrealized P&amp;L, MTM, margin utilization, exposure by symbol/strategy, and exception alerts during market hours.
+
+
+High
+
+
+FR-12
+
+
+Backtesting with VectorBT
+
+
+Provide strategy backtests, parameter sweeps, benchmark comparisons, slippage assumptions, and risk-adjusted metrics using VectorBT.
+
+
+High
+
+
+FR-13
+
+
+Paper trading and replay
+
+
+Support simulation mode, historical replay, and decision-by-decision audit comparison before enabling live execution.
+
+
+High
+
+
+
+
+
+
+
+FR-14
+
+
+Alerting and operator controls
+
+
+Provide alerts for failures, rejections, drawdowns, latency spikes, and kill-switch events; support manual pause, resume, and forced square-off.
+
+
+High
+
+
+FR-15
+
+
+Logging and replayability
+
+
+Persist prompts, features, signals, approvals, API payload hashes, and final execution outcomes so that each trade decision can be replayed later.
+
+
+High
+
+
+
+
+Non-Functional Requirements
+
+761999127300
+
+
+
+
+
+Req ID
+
+
+Category
+
+
+Requirement Description
+
+
+NFR-01
+
+
+Availability
+
+
+Target 99.9% platform availability during trading hours with graceful degradation to read-only mode on partial failures.
+
+
+NFR-02
+
+
+Latency
+
+
+Median internal signal-to-order preparation latency should remain under 250 ms, excluding broker/network latency.
+
+
+NFR-03
+
+
+Rate-limit compliance
+
+
+System must enforce Breeze limits of 100 API calls per minute and 5000 API calls per day using shared counters, backoff, and prioritization.
+
+
+NFR-04
+
+
+Resiliency
+
+
+Failures in any non-critical agent (for example, sentiment analysis) must not crash execution services; the platform should fail closed for trading decisions.
+
+
+NFR-05
+
+
+Observability
+
+
+Expose metrics, traces, and structured logs for API latency, order errors, agent runtimes, prompt failures, and risk-rejection causes.
+
+
+NFR-06
+
+
+Maintainability
+
+
+Strategy logic, risk policies, and broker connectors shall be modular and version-controlled for safe updates and rollback.
+
+
+NFR-07
+
+
+Testability
+
+
+All agents shall support unit tests, scenario tests, replay tests, and mock Breeze connector tests before release approval.
+
+
+NFR-08
+
+
+Explainability
+
+
+Each approved or rejected trade must include machine-readable reason codes and a human-readable explanation summary.
+
+
+NFR-09
+
+
+Auditability
+
+
+All prompts, features, policy checks, approvals, and API calls shall be timestamped and retained in tamper-evident logs.
+
+
+NFR-10
+
+
+Data retention
+
+
+Retain market snapshots, features, signals, orders, and compliance evidence for a business-defined retention period, with export capability for audits.
+
+
+NFR-11
+
+
+Security
+
+
+Secrets must be encrypted, access must be role-based, and local model endpoints must be isolated from public exposure.
+
+
+NFR-12
+
+
+Deployment portability
+
+
+Support deployment on a controlled workstation or private server with static IP, containerized services, and repeatable environment setup.
+
+
+
+
+Data Requirements
+
+761999117523
+
+
+
+
+
+
+
+Req ID
+
+
+Data Set
+
+
+Requirement
+
+
+DR-01
+
+
+Historical market data
+
+
+Persist a minimum of 1 month of OHLCV data per instrument for baseline feature computation, walk-forward analysis, and VectorBT backtesting seed data.
+
+
+DR-02
+
+
+Recent news corpus
+
+
+Maintain a rolling 1-week news corpus per tracked symbol, sector, and index for sentiment context, event clustering, and manual review.
+
+
+DR-03
+
+
+Security master / token map
+
+
+Refresh the ICICI Direct security master daily before market open and reconcile symbol-token-expiry-strike mappings.
+
+
+DR-04
+
+
+Derived features
+
+
+Store indicator values, sentiment scores, volatility measures, pair spreads, z-scores, and confidence metrics with timestamps.
+
+
+DR-05
+
+
+Decision and execution logs
+
+
+Store candidate signals, risk approvals/rejections, API payload hashes, order IDs, fills, cancel/modify events, and operator actions.
+
+
+DR-06
+
+
+Data quality controls
+
+
+Implement missing-candle detection, duplicate-event suppression, stale-price checks, timestamp normalization, and source lineage tracking.
+
+
+
+
+Trading Strategies
+
+761999127300
+
+
+
+The platform shall support configurable strategy templates rather than hard-coded one-off rules. Each strategy must have parameter sets, approval status, risk profile, and deployment mode (disabled, backtest, paper, pilot live, production live).
+
+
+
+
+
+Strategy
+
+
+Business Intent
+
+
+System Logic
+
+
+Key Guardrails
+
+
+Day Trading - Momentum / Mean Reversion
+
+
+Capture intraday directional or reversal moves in liquid cash equities or index derivatives.
+
+
+Use RSI, MACD, Bollinger Bands, moving average alignment, volume filters, and time-window filters; mandatory intraday square-off.
+
+
+High liquidity universe, no overnight carry, max trades per symbol, no trading near close unless policy allows.
+
+
+F&amp;O Straddle
+
+
+Express volatility view around events or exploit premium decay depending on long/short configuration.
+
+
+Construct ATM call and put combinations; evaluate IV regime, theta decay, event risk, and margin sufficiency.
+
+
+Lot-size validation, event whitelist, defined stop-loss or max loss, exposure cap by expiry.
+
+
+F&amp;O Strangle
+
+
+Trade wider expected move ranges while reducing premium or directional sensitivity compared with straddles.
+
+
+Select OTM strikes based on volatility bands, ATR, implied volatility, and target premium constraints.
+
+
+Strike distance rules, slippage controls, margin threshold, early exit rules on volatility expansion.
+
+
+Pairs Trading / Statistical Arbitrage
+
+
+Monetize temporary divergence between historically related instruments.
+
+
+Use spread normalization, correlation / cointegration screening, z-score thresholds, and reversion exit logic.
+
+
+Only approved pairs, hedge ratio validation, maximum holding period, spread stop-loss, liquidity screens.
+
+
+
+
+
+
+
+Risk Management Framework
+
+761999127275
+
+
+
+
+
+Req ID
+
+
+Control
+
+
+Description
+
+
+RM-01
+
+
+Maximum position size
+
+
+Cap exposure per symbol, per strategy, per sector, and at total portfolio level as a percentage of available capital/margin.
+
+
+RM-02
+
+
+Per-trade risk limit
+
+
+Reject or resize trades whose expected loss at stop exceeds configured risk budget.
+
+
+RM-03
+
+
+Daily loss limit and kill switch
+
+
+Automatically halt new trades, cancel open orders, and initiate policy-driven square-off when daily drawdown thresholds are breached.
+
+
+RM-04
+
+
+Margin sufficiency
+
+
+Use Breeze funds and margin calculator outputs before approval and after significant portfolio changes.
+
+
+RM-05
+
+
+Slippage and liquidity controls
+
+
+Reject trades when spread, depth, or expected slippage breaches configured thresholds.
+
+
+RM-06
+
+
+Circuit-breaker and anomaly awareness
+
+
+Pause execution on exchange-level disruptions, stale feeds, abnormal volatility, or unusual rejection rates.
+
+
+RM-07
+
+
+Compliance throttle
+
+
+Apply hard barriers for 10 OPS, single-key routing, limit-order-only rules, and product restrictions.
+
+
+RM-08
+
+
+Manual override
+
+
+Allow authorized operators to pause one strategy, all strategies, or the full execution engine instantly.
+
+
+
+
+Integration Requirements
+
+761999127049
+
+
+
+INT-01: ICICI Direct Breeze API: Integrate customer details, historical charts, funds, margin calculator, order placement, modify/cancel, order book, positions/portfolio, and quote/live-feed capabilities as permitted by the broker.
+
+
+INT-02:AuthenticationLayer:Implementchecksumsigningas
+
+93343736750
+586739836746
+
+X-Checksum
+
+
+X-ChecksumSHA256(timestamp + JSONPostData + secret_key)andsend,
+
+
+X-Timestamp
+ ,  
+X-AppKey
+ , and  
+X-SessionToken
+ headers for signed requests.
+
+
+INT-03: Ollama: Integrate local model serving for sentiment and bounded reasoning, with model version pinning and schema-validated outputs.
+
+
+INT-04: VectorBT: Use VectorBT for backtests, walk-forward experiments, parameter sweeps, and result comparison against paper/live outcomes.
+
+
+INT-05: News Providers: Connect approved news/RSS/market-news sources with symbol mapping, deduplication, and timestamp normalization.
+
+
+INT-06: Observability Stack: Integrate structured logging, metrics, dashboards, and alert channels for operations and compliance teams.
+
+
+INT-07: Secrets and Environment Management: Use encrypted vaulting or equivalent secret-management patterns for API keys, credentials, and environment-specific settings.
+
+
+
+
+
+
+
+Security Requirements
+
+761999127275
+
+
+
+
+
+Req ID
+
+
+Security Control
+
+
+Requirement
+
+
+SR-01
+
+
+Encryption
+
+
+Encrypt sensitive data at rest and enforce TLS 1.2+ for all broker and external integrations.
+
+
+SR-02
+
+
+Role-based access control
+
+
+Provide separate roles for operator, developer, auditor, and administrator, with least-privilege access.
+
+
+SR-03
+
+
+Secret protection
+
+
+41433775852
+99536275852
+Store AppKey , secret_key , tokens, and user credentials in encrypted secret stores; never log raw secrets.
+
+
+SR-04
+
+
+IP allowlisting
+
+
+Restrict broker access to the registered static IP and verify network egress before execution.
+
+
+SR-05
+
+
+Tamper-evident logs
+
+
+Use append-only storage, hash chaining, or equivalent controls for execution and audit evidence.
+
+
+SR-06
+
+
+Local model hardening
+
+
+Bind Ollama to localhost or a private interface, control model pull/update policies, and disable unnecessary remote exposure.
+
+
+SR-07
+
+
+Vulnerability management
+
+
+Implement dependency scanning, OS patching, malware protection, and regular review of exposed services.
+
+
+SR-08
+
+
+Operational security
+
+
+Support session timeout, MFA for operator interfaces where applicable, and privileged action logging for overrides and config changes.
+
+
+
+
+Implementation Roadmap
+
+761999127049
+
+
+
+
+
+Phase
+
+
+Focus
+
+
+Indicative Deliverables
+
+
+Phase 1 - Discovery &amp; Compliance  Alignment
+
+
+Requirements finalization, broker validation, operating model
+
+
+Confirmed scope, compliance checklist, infrastructure/static-IP plan, approved strategy list, environment architecture.
+
+
+Phase 2 - Core Foundation
+
+
+Breeze authentication, data store, market/news ingestion, observability baseline
+
+
+Working Breeze connector, token refresh, one-month historical data store, one-week news pipeline, metrics and logs.
+
+
+Phase 3 - Agent Buildout
+
+
+Signal, sentiment, risk, orchestration, and audit services
+
+
+Multi-agent runtime, Ollama wrapper with schema validation, risk engine, audit schema, strategy templates.
+
+
+Phase 4 - Backtesting &amp; Paper Trading
+
+
+VectorBT validation and simulated execution
+
+
+Backtest reports, replay tooling, paper trading dashboards, policy tuning, failure drills.
+
+
+Phase 5 - Controlled Live Pilot
+
+
+Restricted capital deployment under supervision
+
+
+1-lot or low-size live pilot, strict loss caps, live monitoring, compliance review pack, incident response playbooks.
+
+
+
+
+
+
+
+Phase 6 - Production Hardening
+
+
+Operational maturity, security hardening, scale-up governance
+
+
+Release management, DR procedures, vulnerability scans, operator training, sign-off for broader live rollout.
+
+
+
+
+Assumptions, Constraints, and Open Items
+
+761999127299
+
+
+
+Assumptions: ICICI Direct Breeze endpoints remain available for the required instruments; the deployment environment can support a registered static IP and local Ollama runtime.
+
+
+Constraints: Only supported exchanges/products available through Breeze may be traded; market orders and prohibited product flows remain out of scope for execution.
+
+
+Open Item 1: Confirm final broker/exchange process for Algo-ID registration, tagging, or reporting if the strategy crosses unregistered thresholds or is commercially distributed.
+
+
+Open Item 2: Confirm approved news sources, redistribution rights, and retention policies for sentiment-analysis inputs.
+
+
+Open Item 3: Finalize production retention period for prompts, trade evidence, and replay data in consultation with compliance/legal teams.
+
+
+
+
+
+
+
+
+Success Metrics and Acceptance Criteria
+
+761999127318
+
+
+
+
+
+Area
+
+
+Acceptance Criterion
+
+
+Authentication
+
+
+System successfully completes login/session exchange and signs Breeze requests with valid checksum headers in test and pilot environments.
+
+
+Backtesting
+
+
+VectorBT backtests execute reproducibly using stored market data and produce standard metrics such as CAGR, drawdown, win rate, and Sharpe-like measures.
+
+
+Paper trading
+
+
+Five consecutive trading days complete without compliance breaches, unhandled crashes, or rate-limit violations.
+
+
+Risk controls
+
+
+Kill switch, daily loss limits, exposure caps, and operator override actions are verified through scenario testing and logged evidence.
+
+
+Auditability
+
+
+For any executed or rejected trade, the team can reconstruct inputs, derived features, risk rationale, payload hash, and final broker response.
+
+
+Production readiness
+
+
+Compliance, security, and operational sign-offs are completed before enabling full live automation.
+
+
+
+
+Appendix: Core API Endpoints and Glossary
+
+761999127049
+
+
+
+
+
+Core ICICI Direct Breeze API Endpoints
+
+
+
+
+
+
+
+Function
+
+
+Endpoint / Reference
+
+
+Purpose
+
+
+Login
+
+
+
+
+
+119062-63581
+https://api.icicidirect.com/apiuser/login?api_key=AppKey
+
+
+Initiates broker login flow and returns API session for
+
+
+follow-up session token retrieval.
+
+
+Customer details
+
+
+
+
+
+119062-63582
+GET
+
+
+https://api.icicidirect.com/breezeapi/api/v1/customerdetails
+
+
+Exchanges API session/AppKey context for customer/session details used in later signed calls.
+
+
+Historical charts
+
+
+
+
+
+119062-63582
+GET
+
+
+https://api.icicidirect.com/breezeapi/api/v1/historicalcharts
+
+
+Fetches OHLCV history for indicators, backtests, and warm-start analytics.
+
+
+Funds
+
+
+
+
+
+119062-63582
+GET/POST https://api.icicidirect.com/breezeapi/api/v1/funds
+
+
+Retrieves and allocates funds / capital context for trading decisions.
+
+
+Margin calculator
+
+
+
+
+
+119062-54057
+POST
+
+
+https://api.icicidirect.com/breezeapi/api/v1/margincalculator
+
+
+Validates expected margin requirement for positions before order submission.
+
+
+Execution services
+
+
+
+
+
+119062-56435
+Order placement / modify / cancel / order book / positions / portfolio / quotes
+
+
+Supports live execution lifecycle, reconciliation, and operator supervision based on permitted broker APIs.
+
+
+
+
+Authentication and Signing Structure
+
+
+Signed Breeze requests shall include the following:
+
+
+790574417497
+933449303197
+
+Checksum = SHA256(timestamp + JSONPostData + secret_key)
+
+
+Checksum = SHA256(timestamp + JSONPostData + secret_key)790574750872
+933449636572
+
+Content-Type: application/json
+
+
+Content-Type: application/json7905741084247
+933449969947
+
+X-Checksum: token {checksum}
+
+
+X-Checksum: token {checksum}7905741417290
+9334491312515
+
+X-Timestamp: ISO8601 UTC DateTime Format with 0 milliseconds
+
+
+X-Timestamp: ISO8601 UTC DateTime Format with 0 milliseconds
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+X-AppKey: AppKey issued during registration
+
+
+X-AppKey: AppKey issued during registration
+
+
+
+
+
+
+
+
+ 
+
+X-SessionToken: session_token from Customer Details response
+
+
+X-SessionToken: session_token from Customer Details response
+
+
+
+
+
+Glossary
+
+
+
+
+Algo-ID: Exchange/broker-recognized identifier or strategy metadata used for registered algorithm governance where applicable.
+
+
+OHLCV: Open, High, Low, Close, Volume.
+
+
+MTM: Mark-to-Market profit or loss.
+
+
+Ollama: Local model runtime used for privacy-preserving LLM inference.
+
+
+VectorBT: Python library used for fast vectorized backtesting and research workflows.
+
+
+OPS: Orders per second, including place/modify/cancel/square-off operations.
+

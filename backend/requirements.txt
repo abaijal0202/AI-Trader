@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+httpx
+redis
+asyncpg
+sqlalchemy
+pydantic
+pydantic-settings
+google-genai
+vectorbt
+pandas
+numpy
+python-dotenv
