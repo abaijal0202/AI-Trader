@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ReactFlow,
   MiniMap,
@@ -7,10 +7,8 @@ import {
   useNodesState,
   useEdgesState,
   addEdge,
-  Connection,
-  Edge,
-  Node
 } from '@xyflow/react';
+import type { Connection, Edge, Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Activity, Brain, Database, ShieldAlert, Zap } from 'lucide-react';
 
@@ -55,8 +53,38 @@ const initialEdges: Edge[] = [
 ];
 
 export default function App() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [nodes, , onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [symbol, setSymbol] = useState('RELIANCE');
+  const [isRunning, setIsRunning] = useState(false);
+  const [logs, setLogs] = useState<{time: string, message: string, color: string}[]>([]);
+
+  const runTrader = async () => {
+    if (!symbol) return;
+    setIsRunning(true);
+    setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), message: `Started cycle for ${symbol}...`, color: 'text-gray-400' }]);
+    
+    try {
+      const response = await fetch(`http://localhost:8000/run/${symbol}`, { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.status === 'completed') {
+        setLogs(prev => [
+          ...prev,
+          { time: new Date().toLocaleTimeString(), message: `Sentiment Agent: ${data.sentiment.sentiment} (Score: ${data.sentiment.score})`, color: 'text-purple-400' },
+          { time: new Date().toLocaleTimeString(), message: `Signal Agent: ${data.signal.action} (Conf: ${data.signal.confidence}%)`, color: 'text-yellow-400' },
+          { time: new Date().toLocaleTimeString(), message: `Risk Agent approved: ${data.risk_passed ? 'Yes' : 'No'}`, color: data.risk_passed ? 'text-green-400' : 'text-red-400' },
+          { time: new Date().toLocaleTimeString(), message: `Execution: ${data.execution.status || 'Skipped'}`, color: 'text-blue-400' }
+        ]);
+      } else {
+        setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), message: `Error: ${data.message || 'Cycle failed'}`, color: 'text-red-400' }]);
+      }
+    } catch (error) {
+      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), message: `API Error: ${error}`, color: 'text-red-400' }]);
+    } finally {
+      setIsRunning(false);
+    }
+  };
 
   const onConnect = useCallback(
     (params: Connection | Edge) => setEdges((eds) => addEdge(params, eds)),
@@ -72,10 +100,32 @@ export default function App() {
         </div>
         <div className="flex items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <span className="text-gray-400">System Active</span>
+            <span className={`w-2 h-2 rounded-full animate-pulse ${isRunning ? 'bg-yellow-500' : 'bg-green-500'}`}></span>
+            <span className="text-gray-400">{isRunning ? 'Cycle Running...' : 'System Active'}</span>
           </div>
-          <button className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors">
+          <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-md overflow-hidden">
+             <input 
+                type="text" 
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                placeholder="SYMBOL" 
+                className="bg-transparent text-white px-3 py-2 outline-none w-28 uppercase"
+             />
+             <button 
+                onClick={runTrader}
+                disabled={isRunning}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white font-medium transition-colors border-l border-gray-700"
+             >
+                RUN TRADER
+             </button>
+          </div>
+          <button 
+            onClick={() => {
+              setSymbol('');
+              setLogs([{ time: new Date().toLocaleTimeString(), message: 'SYSTEM KILLED. All operations halted.', color: 'text-red-500 font-bold' }]);
+            }}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors"
+          >
             KILL SWITCH
           </button>
         </div>
@@ -109,21 +159,22 @@ export default function App() {
         </ReactFlow>
         
         {/* Overlay dashboard panel */}
-        <div className="absolute bottom-6 left-6 w-80 bg-gray-800/90 backdrop-blur border border-gray-700 rounded-xl p-4 shadow-2xl">
-          <h3 className="font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Live Execution Log</h3>
+        <div className="absolute bottom-6 left-6 w-[400px] max-h-64 overflow-y-auto bg-gray-800/90 backdrop-blur border border-gray-700 rounded-xl p-4 shadow-2xl">
+          <h3 className="font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2 flex justify-between">
+            <span>Live Execution Log</span>
+            <button onClick={() => setLogs([])} className="text-xs text-gray-400 hover:text-white">Clear</button>
+          </h3>
           <div className="space-y-3 text-sm">
-            <div className="flex gap-2 text-gray-400">
-              <span className="text-blue-400 shrink-0">10:42:15</span>
-              <span>Signal Agent generated BUY for ITC (Conf: 85%)</span>
-            </div>
-            <div className="flex gap-2 text-gray-400">
-              <span className="text-blue-400 shrink-0">10:42:16</span>
-              <span>Risk Agent approved. Margin sufficiency: OK.</span>
-            </div>
-            <div className="flex gap-2 text-gray-400">
-              <span className="text-blue-400 shrink-0">10:42:16</span>
-              <span className="text-green-400">Execution Agent placed LIMIT order @ 430.50</span>
-            </div>
+            {logs.length === 0 ? (
+                <div className="text-gray-500 italic text-center py-4">Awaiting execution...</div>
+            ) : (
+                logs.map((log, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-gray-500 shrink-0">{log.time}</span>
+                    <span className={log.color}>{log.message}</span>
+                  </div>
+                ))
+            )}
           </div>
         </div>
       </main>

@@ -1,28 +1,24 @@
-from google import genai
-from google.genai import types
-import json
-import os
+from agents.llm_utils import OllamaClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SentimentAgent:
     """
-    Collects news and computes symbol-level sentiment using Gemini Pro.
+    Collects news and computes symbol-level sentiment using Ollama.
     """
-    def __init__(self, model_name: str = "gemini-3.0-pro"):
-        self.model = model_name
-        self.client = genai.Client() # Assumes GEMINI_API_KEY is in environment
+    def __init__(self, model_name: str = "gemma4L:e4b"):
+        self.llm = OllamaClient(model_name=model_name)
 
     async def analyze_sentiment(self, news_text: str) -> dict:
-        prompt = f"Analyze the sentiment of the following news for trading signals. Return ONLY a JSON object with 'sentiment' (bullish/bearish/neutral) and 'score' (0-100):\n{news_text}"
+        prompt = (
+            "Analyze the sentiment of the following news for trading signals. "
+            "Return ONLY a JSON object with 'sentiment' (bullish/bearish/neutral), "
+            "'score' (0-100), and 'reasoning' (a brief explanation).\n\n"
+            f"News Text: {news_text}"
+        )
         
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                ),
-            )
-            return json.loads(response.text)
-        except Exception as e:
-            # Fallback in case of error
-            return {"sentiment": "neutral", "score": 50, "error": str(e)}
+        result = self.llm.generate_json(prompt)
+        if "error" in result:
+            return {"sentiment": "neutral", "score": 50, "reasoning": "Fallback due to API error."}
+        return result

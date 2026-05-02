@@ -1,6 +1,6 @@
 # AI Trader: Agentic AI Trading System
 
-A compliance-first, local-first, fail-closed agentic trading system for Indian retail markets, integrated with ICICI Direct Breeze API and powered by local LLM inference.
+A compliance-first, fail-closed agentic trading system for Indian retail markets, integrated with ICICI Direct Breeze API and powered by local Ollama LLM inference.
 
 ## 🚀 Overview
 
@@ -9,7 +9,7 @@ AI Trader is a multi-agent system designed for automated trade signaling, risk v
 ### Key Features
 - **Broker Integration:** Seamless connection with ICICI Direct Breeze API.
 - **Agentic Orchestration:** Multi-agent architecture (Signal, Sentiment, Risk, Execution) coordinated by a central orchestrator.
-- **Local Inference:** Utilizes Ollama for local LLM processing, ensuring sensitive data remains on-premise.
+- **Inference:** Utilizes local Ollama for LLM processing.
 - **Visual Oversight:** Interactive UI built with React Flow for real-time monitoring and agent visualization.
 - **Regulatory Guardrails:** Enforces policies such as 10 Orders Per Second (OPS), static IP egress, and limit-order-only execution.
 

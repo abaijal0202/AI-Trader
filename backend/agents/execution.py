@@ -1,4 +1,4 @@
-from backend.breeze_client import BreezeClient
+from breeze_client import BreezeClient
 from typing import Dict, Any
 
 class ExecutionAgent:
